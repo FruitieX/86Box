@@ -252,6 +252,23 @@ video_blit_complete_monitor(int monitor_index)
 }
 
 void
+video_get_blit_rect(int monitor_index, int *x, int *y, int *w, int *h)
+{
+    const blit_data_t *blit_data_ptr = monitors[monitor_index].mon_blit_data_ptr;
+    if (blit_data_ptr && blit_data_ptr->w > 0 && blit_data_ptr->h > 0) {
+        *x = blit_data_ptr->x;
+        *y = blit_data_ptr->y;
+        *w = blit_data_ptr->w;
+        *h = blit_data_ptr->h;
+    } else {
+        *x = 0;
+        *y = 0;
+        *w = 0;
+        *h = 0;
+    }
+}
+
+void
 video_wait_for_blit_monitor(int monitor_index)
 {
     blit_data_t *blit_data_ptr = monitors[monitor_index].mon_blit_data_ptr;

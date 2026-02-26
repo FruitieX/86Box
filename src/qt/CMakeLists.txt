@@ -343,6 +343,7 @@ else()
     target_sources(plat PRIVATE
         ../unix/unix_serial_passthrough.c
         ../unix/unix_netsocket.c
+        ../unix/unix_control_socket.c
     )
 endif()
 

@@ -237,6 +237,8 @@ int      portable_mode = 0;                                       /* We are runn
                                                                      (global dirs = exe path) */
 int      global_cfg_overridden = 0;                               /* Global config file was overriden on command line */
 
+char     control_socket_path[1024] = { '\0' };                     /* (O) control socket path */
+
 int      monitor_edid = 0;                                        /* (C) Which EDID to use. 0=default, 1=custom. */
 char     monitor_edid_path[1024] = { 0 };                         /* (C) Path to custom EDID */
 
@@ -725,6 +727,9 @@ pc_show_usage(void)
             "-T or --testmode\t\t- test mode: execute the test mode entry\n"
             "\t\t\t\t   point on init/hard reset\n"
 #endif
+#if !defined(_WIN32)
+            "-U or --control-socket path\t- control socket path for IPC\n"
+#endif
             "-V or --vmname name\t\t- overrides the name of the running VM\n"
 #ifdef _WIN32
             "-W or --nohook\t\t- disables keyboard hook\n"
@@ -964,6 +969,13 @@ usage:
             uid   = (uint32_t *) &unique_id;
             shwnd = (uint32_t *) &source_hwnd;
             sscanf(argv[++c], "%08X%08X,%08X%08X", uid + 1, uid, shwnd + 1, shwnd);
+#endif
+#if !defined(_WIN32)
+        } else if (!strcasecmp(argv[c], "--control-socket") || !strcasecmp(argv[c], "-U")) {
+            if ((c + 1) == argc)
+                goto usage;
+
+            strncpy(control_socket_path, argv[++c], sizeof(control_socket_path) - 1);
 #endif
         } else if (!strcasecmp(argv[c], "--lang") || !strcasecmp(argv[c], "-G")) {
             // This function is currently unimplemented for *nix but has placeholders.

@@ -49,6 +49,15 @@
 #include <86box/video.h>
 #include <86box/ui.h>
 #include <86box/gdbstub.h>
+#include <86box/fdd.h>
+#include <86box/hdd.h>
+#include <86box/scsi_device.h>
+#include <86box/cdrom.h>
+#include <86box/mo.h>
+#include <86box/rdisk.h>
+#include <86box/network.h>
+#include <86box/machine_status.h>
+#include <86box/unix_control_socket.h>
 
 #define __USE_GNU 1 /* shouldn't be done, yet it is */
 #include <pthread.h>
@@ -487,21 +496,118 @@ plat_remove(char *path)
 
 void ui_sb_update_icon_state(int tag, int state)
 {
+    const int category = tag & 0xfffffff0;
+    const int item     = tag & 0xf;
+
+    switch (category) {
+        case SB_FLOPPY:
+            machine_status.fdd[item].empty = state ? true : false;
+            break;
+        case SB_CDROM:
+            machine_status.cdrom[item].empty = state ? true : false;
+            break;
+        case SB_RDISK:
+            machine_status.rdisk[item].empty = state ? true : false;
+            break;
+        case SB_MO:
+            machine_status.mo[item].empty = state ? true : false;
+            break;
+        case SB_NETWORK:
+            machine_status.net[item].empty = state ? true : false;
+            break;
+        case SB_CASSETTE:
+            machine_status.cassette.empty = state ? true : false;
+            break;
+        case SB_CARTRIDGE:
+            machine_status.cartridge[item].empty = state ? true : false;
+            break;
+        default:
+            break;
+    }
     osd_ui_sb_update_icon_state(tag, state);
 }
 
 void ui_sb_update_icon(int tag, int active)
 {
+    const int category = tag & 0xfffffff0;
+    const int item     = tag & 0xf;
+
+    switch (category) {
+        case SB_FLOPPY:
+            machine_status.fdd[item].active = active > 0 ? true : false;
+            break;
+        case SB_CDROM:
+            machine_status.cdrom[item].active = active > 0 ? true : false;
+            break;
+        case SB_RDISK:
+            machine_status.rdisk[item].active = active > 0 ? true : false;
+            break;
+        case SB_MO:
+            machine_status.mo[item].active = active > 0 ? true : false;
+            break;
+        case SB_HDD:
+            machine_status.hdd[item].active = active > 0 ? true : false;
+            break;
+        case SB_NETWORK:
+            machine_status.net[item].active = active > 0 ? true : false;
+            break;
+        default:
+            break;
+    }
     osd_ui_sb_update_icon(tag, active);
 }
 
 void ui_sb_update_icon_write(int tag, int active)
 {
+    const int category = tag & 0xfffffff0;
+    const int item     = tag & 0xf;
+
+    switch (category) {
+        case SB_FLOPPY:
+            machine_status.fdd[item].write_active = active > 0 ? true : false;
+            break;
+        case SB_CDROM:
+            machine_status.cdrom[item].write_active = active > 0 ? true : false;
+            break;
+        case SB_RDISK:
+            machine_status.rdisk[item].write_active = active > 0 ? true : false;
+            break;
+        case SB_MO:
+            machine_status.mo[item].write_active = active > 0 ? true : false;
+            break;
+        case SB_HDD:
+            machine_status.hdd[item].write_active = active > 0 ? true : false;
+            break;
+        case SB_NETWORK:
+            machine_status.net[item].write_active = active > 0 ? true : false;
+            break;
+        default:
+            break;
+    }
     osd_ui_sb_update_icon_write(tag, active);
 }
 
 void ui_sb_update_icon_wp(int tag, int state)
 {
+    const int category = tag & 0xfffffff0;
+    const int item     = tag & 0xf;
+
+    switch (category) {
+        case SB_FLOPPY:
+            machine_status.fdd[item].write_prot = state ? true : false;
+            break;
+        case SB_CDROM:
+            machine_status.cdrom[item].write_prot = state ? true : false;
+            break;
+        case SB_RDISK:
+            machine_status.rdisk[item].write_prot = state ? true : false;
+            break;
+        case SB_MO:
+            machine_status.mo[item].write_prot = state ? true : false;
+            break;
+        default:
+            break;
+    }
     osd_ui_sb_update_icon_wp(tag, state);
 }
 
@@ -1380,6 +1486,10 @@ main(int argc, char **argv)
     /* Fire up the machine. */
     pc_reset_hard_init();
 
+    /* Start the control socket if requested. */
+    if (control_socket_path[0] != '\0')
+        control_socket_init(control_socket_path);
+
     /* Set the PAUSE mode depending on the renderer. */
     plat_pause(0);
 
@@ -1634,6 +1744,7 @@ main(int argc, char **argv)
         }
     }
     printf("\n");
+    control_socket_close();
     SDL_DestroyMutex(blitmtx);
     SDL_DestroyMutex(mousemutex);
     SDL_Quit();
