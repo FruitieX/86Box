@@ -55,6 +55,9 @@ extern "C" {
 #include <86box/gdbstub.h>
 #include <86box/version.h>
 #include <86box/renderdefs.h>
+#if !defined(_WIN32)
+#    include <86box/unix_control_socket.h>
+#endif
 #ifdef Q_OS_LINUX
 #    define GAMEMODE_AUTO
 #    include "../unix/gamemode/gamemode_client.h"
@@ -899,6 +902,12 @@ main(int argc, char *argv[])
         NewDarkMode = util::isWindowsLightTheme();
 #endif
         pc_reset_hard_init();
+
+#if !defined(_WIN32)
+        /* Start the control socket if requested. */
+        if (control_socket_path[0] != '\0')
+            control_socket_init(control_socket_path);
+#endif
 
         /* Set the PAUSE mode depending on the renderer. */
 #ifdef USE_VNC

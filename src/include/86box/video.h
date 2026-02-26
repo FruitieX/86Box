@@ -281,6 +281,7 @@ extern void video_blit_memtoscreen_monitor(int x, int y, int w, int h, int monit
 extern void video_blit_complete_monitor(int monitor_index);
 extern void video_wait_for_blit_monitor(int monitor_index);
 extern void video_wait_for_buffer_monitor(int monitor_index);
+extern void video_get_blit_rect(int monitor_index, int *x, int *y, int *w, int *h);
 
 extern bitmap_t *create_bitmap(int w, int h);
 extern void      destroy_bitmap(bitmap_t *b);
