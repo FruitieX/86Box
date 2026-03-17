@@ -414,7 +414,7 @@ ctrl_handle_command(ctrl_client_t *client, char *line)
             free(linecpy);
             return;
         }
-        cdrom_mount(id, "");
+        cdrom_eject(id);
         char msg[64];
         snprintf(msg, sizeof(msg), "OK cdrom %d ejected\n", id);
         ctrl_send(client, msg);
