@@ -67,3 +67,6 @@ CMakeLists.txt.user
 
 # Jetbrains CLion
 .idea
+
+# Nix
+/result
