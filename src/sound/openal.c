@@ -36,22 +36,24 @@
 #define FREQ   SOUND_FREQ
 #define BUFLEN SOUNDBUFLEN
 
-#define I_NORMAL 0
-#define I_MUSIC  1
-#define I_WT     2
-#define I_CD     3
-#define I_FDD    4
-#define I_HDD    5
-#define I_MIDI   6
+#define I_NORMAL          0
+#define I_MUSIC           1
+#define I_WT              2
+#define I_CD              3
+#define I_FDD             4
+#define I_HDD             5
+#define I_CDROM_ACTIVITY  6
+#define I_MIDI            7
 
-ALuint        buffers[4];       /* front and back buffers */
-ALuint        buffers_music[4]; /* front and back buffers */
-ALuint        buffers_wt[4];    /* front and back buffers */
-ALuint        buffers_cd[4];    /* front and back buffers */
-ALuint        buffers_fdd[4];   /* front and back buffers */
-ALuint        buffers_hdd[4];   /* front and back buffers */
-ALuint        buffers_midi[4];  /* front and back buffers */
-static ALuint source[7];        /* audio sources */
+ALuint        buffers[4];                /* front and back buffers */
+ALuint        buffers_music[4];          /* front and back buffers */
+ALuint        buffers_wt[4];             /* front and back buffers */
+ALuint        buffers_cd[4];             /* front and back buffers */
+ALuint        buffers_fdd[4];            /* front and back buffers */
+ALuint        buffers_hdd[4];            /* front and back buffers */
+ALuint        buffers_midi[4];           /* front and back buffers */
+ALuint        buffers_cdrom_activity[4]; /* front and back buffers */
+static ALuint source[8];                 /* audio sources */
 
 static int         midi_freq     = 44100;
 static int         midi_buf_size = 4410;
@@ -108,8 +110,9 @@ closeal(void)
     alSourceStopv(sources, source);
     alDeleteSources(sources, source);
 
-    if (sources >= 7)
+    if (sources >= 8)
         alDeleteBuffers(4, buffers_midi);
+    alDeleteBuffers(4, buffers_cdrom_activity);
     alDeleteBuffers(4, buffers_fdd);
     alDeleteBuffers(4, buffers_hdd);
     alDeleteBuffers(4, buffers_cd);
@@ -124,20 +127,22 @@ closeal(void)
 void
 inital(void)
 {
-    float   *buf             = NULL;
-    float   *music_buf       = NULL;
-    float   *wt_buf          = NULL;
-    float   *cd_buf          = NULL;
-    float   *midi_buf        = NULL;
-    float   *fdd_buf         = NULL;
-    float   *hdd_buf         = NULL;
-    int16_t *buf_int16       = NULL;
-    int16_t *music_buf_int16 = NULL;
-    int16_t *wt_buf_int16    = NULL;
-    int16_t *cd_buf_int16    = NULL;
-    int16_t *midi_buf_int16  = NULL;
-    int16_t *fdd_buf_int16   = NULL;
-    int16_t *hdd_buf_int16   = NULL;
+    float   *buf                    = NULL;
+    float   *music_buf              = NULL;
+    float   *wt_buf                 = NULL;
+    float   *cd_buf                 = NULL;
+    float   *midi_buf               = NULL;
+    float   *fdd_buf                = NULL;
+    float   *hdd_buf                = NULL;
+    float   *cdrom_activity_buf     = NULL;
+    int16_t *buf_int16              = NULL;
+    int16_t *music_buf_int16        = NULL;
+    int16_t *wt_buf_int16           = NULL;
+    int16_t *cd_buf_int16           = NULL;
+    int16_t *midi_buf_int16         = NULL;
+    int16_t *fdd_buf_int16          = NULL;
+    int16_t *hdd_buf_int16          = NULL;
+    int16_t *cdrom_activity_buf_int16 = NULL;
 
     int init_midi = 0;
 
@@ -152,23 +157,25 @@ inital(void)
         init_midi = 1; /* If the device is neither none, nor system MIDI, initialize the
                           MIDI buffer and source, otherwise, do not. */
 
-    sources = 6 + !!init_midi;
+    sources = 7 + !!init_midi;
     if (sound_is_float) {
-        buf       = (float *) calloc((BUFLEN << 1), sizeof(float));
-        music_buf = (float *) calloc((MUSICBUFLEN << 1), sizeof(float));
-        wt_buf    = (float *) calloc((WTBUFLEN << 1), sizeof(float));
-        cd_buf    = (float *) calloc((CD_BUFLEN << 1), sizeof(float));
-        fdd_buf   = (float *) calloc((BUFLEN << 1), sizeof(float));
-        hdd_buf   = (float *) calloc((BUFLEN << 1), sizeof(float));
+        buf              = (float *) calloc((BUFLEN << 1), sizeof(float));
+        music_buf        = (float *) calloc((MUSICBUFLEN << 1), sizeof(float));
+        wt_buf           = (float *) calloc((WTBUFLEN << 1), sizeof(float));
+        cd_buf           = (float *) calloc((CD_BUFLEN << 1), sizeof(float));
+        fdd_buf          = (float *) calloc((BUFLEN << 1), sizeof(float));
+        hdd_buf          = (float *) calloc((BUFLEN << 1), sizeof(float));
+        cdrom_activity_buf = (float *) calloc((BUFLEN << 1), sizeof(float));
         if (init_midi)
             midi_buf = (float *) calloc(midi_buf_size, sizeof(float));
     } else {
-        buf_int16       = (int16_t *) calloc((BUFLEN << 1), sizeof(int16_t));
-        music_buf_int16 = (int16_t *) calloc((MUSICBUFLEN << 1), sizeof(int16_t));
-        wt_buf_int16    = (int16_t *) calloc((WTBUFLEN << 1), sizeof(int16_t));
-        cd_buf_int16    = (int16_t *) calloc((CD_BUFLEN << 1), sizeof(int16_t));
-        fdd_buf_int16   = (int16_t *) calloc((BUFLEN << 1), sizeof(int16_t));
-        hdd_buf_int16   = (int16_t *) calloc((BUFLEN << 1), sizeof(int16_t));
+        buf_int16              = (int16_t *) calloc((BUFLEN << 1), sizeof(int16_t));
+        music_buf_int16        = (int16_t *) calloc((MUSICBUFLEN << 1), sizeof(int16_t));
+        wt_buf_int16           = (int16_t *) calloc((WTBUFLEN << 1), sizeof(int16_t));
+        cd_buf_int16           = (int16_t *) calloc((CD_BUFLEN << 1), sizeof(int16_t));
+        fdd_buf_int16          = (int16_t *) calloc((BUFLEN << 1), sizeof(int16_t));
+        hdd_buf_int16          = (int16_t *) calloc((BUFLEN << 1), sizeof(int16_t));
+        cdrom_activity_buf_int16 = (int16_t *) calloc((BUFLEN << 1), sizeof(int16_t));
         if (init_midi)
             midi_buf_int16 = (int16_t *) calloc(midi_buf_size, sizeof(int16_t));
     }
@@ -179,14 +186,15 @@ inital(void)
     alGenBuffers(4, buffers_hdd);
     alGenBuffers(4, buffers_music);
     alGenBuffers(4, buffers_wt);
+    alGenBuffers(4, buffers_cdrom_activity);
     if (init_midi)
         alGenBuffers(4, buffers_midi);
 
-    // Create sources: 0=main, 1=music, 2=wt, 3=cd, 4=fdd, 5=hdd, 6=midi(optional)
+    // Create sources: 0=main, 1=music, 2=wt, 3=cd, 4=fdd, 5=hdd, 6=cdrom_activity, 7=midi(optional)
     if (init_midi)
-        alGenSources(7, source);
+        alGenSources(8, source);
     else
-        alGenSources(6, source);
+        alGenSources(7, source);
 
     alSource3f(source[I_NORMAL], AL_POSITION, 0.0f, 0.0f, 0.0f);
     alSource3f(source[I_NORMAL], AL_VELOCITY, 0.0f, 0.0f, 0.0f);
@@ -224,6 +232,12 @@ inital(void)
     alSourcef(source[I_HDD], AL_ROLLOFF_FACTOR, 0.0f);
     alSourcei(source[I_HDD], AL_SOURCE_RELATIVE, AL_TRUE);
 
+    alSource3f(source[I_CDROM_ACTIVITY], AL_POSITION, 0.0f, 0.0f, 0.0f);
+    alSource3f(source[I_CDROM_ACTIVITY], AL_VELOCITY, 0.0f, 0.0f, 0.0f);
+    alSource3f(source[I_CDROM_ACTIVITY], AL_DIRECTION, 0.0f, 0.0f, 0.0f);
+    alSourcef(source[I_CDROM_ACTIVITY], AL_ROLLOFF_FACTOR, 0.0f);
+    alSourcei(source[I_CDROM_ACTIVITY], AL_SOURCE_RELATIVE, AL_TRUE);
+
     if (init_midi) {
         alSource3f(source[I_MIDI], AL_POSITION, 0.0f, 0.0f, 0.0f);
         alSource3f(source[I_MIDI], AL_VELOCITY, 0.0f, 0.0f, 0.0f);
@@ -239,6 +253,7 @@ inital(void)
         memset(wt_buf, 0, WTBUFLEN * 2 * sizeof(float));
         memset(fdd_buf, 0, BUFLEN * 2 * sizeof(float));
         memset(hdd_buf, 0, BUFLEN * 2 * sizeof(float));
+        memset(cdrom_activity_buf, 0, BUFLEN * 2 * sizeof(float));
         if (init_midi)
             memset(midi_buf, 0, midi_buf_size * sizeof(float));
     } else {
@@ -248,6 +263,7 @@ inital(void)
         memset(wt_buf_int16, 0, WTBUFLEN * 2 * sizeof(int16_t));
         memset(fdd_buf_int16, 0, BUFLEN * 2 * sizeof(int16_t));
         memset(hdd_buf_int16, 0, BUFLEN * 2 * sizeof(int16_t));
+        memset(cdrom_activity_buf_int16, 0, BUFLEN * 2 * sizeof(int16_t));
         if (init_midi)
             memset(midi_buf_int16, 0, midi_buf_size * sizeof(int16_t));
     }
@@ -260,6 +276,7 @@ inital(void)
             alBufferData(buffers_cd[c], AL_FORMAT_STEREO_FLOAT32, cd_buf, CD_BUFLEN * 2 * sizeof(float), CD_FREQ);
             alBufferData(buffers_fdd[c], AL_FORMAT_STEREO_FLOAT32, fdd_buf, BUFLEN * 2 * sizeof(float), FREQ);
             alBufferData(buffers_hdd[c], AL_FORMAT_STEREO_FLOAT32, hdd_buf, BUFLEN * 2 * sizeof(float), FREQ);
+            alBufferData(buffers_cdrom_activity[c], AL_FORMAT_STEREO_FLOAT32, cdrom_activity_buf, BUFLEN * 2 * sizeof(float), FREQ);
             if (init_midi)
                 alBufferData(buffers_midi[c], AL_FORMAT_STEREO_FLOAT32, midi_buf, midi_buf_size * (int) sizeof(float), midi_freq);
         } else {
@@ -269,6 +286,7 @@ inital(void)
             alBufferData(buffers_cd[c], AL_FORMAT_STEREO16, cd_buf_int16, CD_BUFLEN * 2 * sizeof(int16_t), CD_FREQ);
             alBufferData(buffers_fdd[c], AL_FORMAT_STEREO16, fdd_buf_int16, BUFLEN * 2 * sizeof(int16_t), FREQ);
             alBufferData(buffers_hdd[c], AL_FORMAT_STEREO16, hdd_buf_int16, BUFLEN * 2 * sizeof(int16_t), FREQ);
+            alBufferData(buffers_cdrom_activity[c], AL_FORMAT_STEREO16, cdrom_activity_buf_int16, BUFLEN * 2 * sizeof(int16_t), FREQ);
             if (init_midi)
                 alBufferData(buffers_midi[c], AL_FORMAT_STEREO16, midi_buf_int16, midi_buf_size * (int) sizeof(int16_t), midi_freq);
         }
@@ -280,6 +298,7 @@ inital(void)
     alSourceQueueBuffers(source[I_CD], 4, buffers_cd);
     alSourceQueueBuffers(source[I_FDD], 4, buffers_fdd);
     alSourceQueueBuffers(source[I_HDD], 4, buffers_hdd);
+    alSourceQueueBuffers(source[I_CDROM_ACTIVITY], 4, buffers_cdrom_activity);
     if (init_midi)
         alSourceQueueBuffers(source[I_MIDI], 4, buffers_midi);
     alSourcePlay(source[I_NORMAL]);
@@ -288,6 +307,7 @@ inital(void)
     alSourcePlay(source[I_CD]);
     alSourcePlay(source[I_FDD]);
     alSourcePlay(source[I_HDD]);
+    alSourcePlay(source[I_CDROM_ACTIVITY]);
     if (init_midi)
         alSourcePlay(source[I_MIDI]);
 
@@ -300,6 +320,7 @@ inital(void)
         free(buf);
         free(fdd_buf);
         free(hdd_buf);
+        free(cdrom_activity_buf);
     } else {
         if (init_midi)
             free(midi_buf_int16);
@@ -309,6 +330,7 @@ inital(void)
         free(buf_int16);
         free(fdd_buf_int16);
         free(hdd_buf_int16);
+        free(cdrom_activity_buf_int16);
     }
 
     initialized = 1;
@@ -387,4 +409,10 @@ void
 givealbuffer_hdd(const void *buf, const uint32_t size)
 {
     givealbuffer_common(buf, I_HDD, (int) size, FREQ);
+}
+
+void
+givealbuffer_cdrom_activity(const void *buf, const uint32_t size)
+{
+    givealbuffer_common(buf, I_CDROM_ACTIVITY, (int) size, FREQ);
 }

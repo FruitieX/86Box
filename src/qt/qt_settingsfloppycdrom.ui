@@ -242,6 +242,26 @@
             </property>
            </widget>
           </item>
+          <item row="2" column="0">
+           <widget class="QLabel" name="labelCDROMAudio">
+            <property name="text">
+             <string>Audio:</string>
+            </property>
+           </widget>
+          </item>
+          <item row="2" column="1" colspan="5">
+           <widget class="QComboBox" name="comboBoxCDROMAudio">
+            <property name="maxVisibleItems">
+             <number>30</number>
+            </property>
+            <property name="sizePolicy">
+             <sizepolicy hsizetype="MinimumExpanding" vsizetype="Preferred">
+              <horstretch>0</horstretch>
+              <verstretch>0</verstretch>
+             </sizepolicy>
+            </property>
+           </widget>
+          </item>
          </layout>
         </widget>
        </item>
@@ -264,6 +284,7 @@
   <tabstop>comboBoxChannel</tabstop>
   <tabstop>comboBoxSpeed</tabstop>
   <tabstop>comboBoxCDROMType</tabstop>
+  <tabstop>comboBoxCDROMAudio</tabstop>
  </tabstops>
  <resources/>
  <connections/>

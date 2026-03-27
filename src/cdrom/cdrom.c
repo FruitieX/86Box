@@ -25,6 +25,7 @@
 #include <86box/device.h>
 #include <86box/config.h>
 #include <86box/cdrom.h>
+#include <86box/cdrom_audio.h>
 #include <86box/cdrom_image.h>
 #include <86box/cdrom_interface.h>
 #ifdef USE_CDROM_MITSUMI
@@ -1473,6 +1474,8 @@ cdrom_seek(cdrom_t *dev, const uint32_t pos, const uint8_t vendor_type)
 
     dev->seek_pos      = real_pos;
     dev->cached_sector = -1;
+
+    cdrom_audio_seek(dev->id, real_pos);
 }
 
 int
@@ -3061,6 +3064,9 @@ cdrom_load(cdrom_t *dev, const char *fn, const int skip_insert)
         /* The drive was previously empty, transition directly to UNIT ATTENTION. */
         if (was_empty)
             cdrom_insert(dev->id);
+
+        cdrom_audio_tray_close(dev->id);
+        cdrom_audio_spinup_drive(dev->id);
     }
 
     return ret;
@@ -3250,6 +3256,9 @@ cdrom_eject(const uint8_t id)
     const cdrom_t *dev = &cdrom[id];
 
     if (strlen(dev->image_path) != 0) {
+        cdrom_audio_spindown_drive(id);
+        cdrom_audio_tray_open(id);
+
         cdrom_exit(id);
 
         plat_cdrom_ui_update(id, 0);

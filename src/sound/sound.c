@@ -38,6 +38,7 @@
 #include <86box/sound.h>
 #include <86box/fdd_audio.h>
 #include <86box/hdd_audio.h>
+#include <86box/cdrom_audio.h>
 
 typedef struct {
     const device_t *device;
@@ -102,6 +103,12 @@ static event_t      *sound_hdd_event;
 static event_t      *sound_hdd_start_event;
 static volatile int hddaudioon = 0;
 static int          hdd_thread_enable = 0;
+
+static thread_t     *sound_cdrom_activity_thread_h;
+static event_t      *sound_cdrom_activity_event;
+static event_t      *sound_cdrom_activity_start_event;
+static volatile int cdrom_activity_audioon = 0;
+static int          cdrom_activity_thread_enable = 0;
 
 static void (*filter_cd_audio)(int channel, double *buffer, void *priv) = NULL;
 static void *filter_cd_audio_p                                          = NULL;
@@ -630,6 +637,10 @@ sound_poll(UNUSED(void *priv))
         if (hdd_thread_enable) {
             thread_set_event(sound_hdd_event);
         }
+
+        if (cdrom_activity_thread_enable) {
+            thread_set_event(sound_cdrom_activity_event);
+        }
         sound_pos_global = 0;
     }
 }
@@ -925,6 +936,61 @@ sound_hdd_thread_end(void)
         if (sound_hdd_start_event) {
             thread_destroy_event(sound_hdd_start_event);
             sound_hdd_start_event = NULL;
+        }
+    }
+}
+
+static void
+sound_cdrom_activity_thread(UNUSED(void *param))
+{
+    thread_set_event(sound_cdrom_activity_start_event);
+    while (cdrom_activity_audioon) {
+        thread_wait_event(sound_cdrom_activity_event, -1);
+        thread_reset_event(sound_cdrom_activity_event);
+
+        if (!cdrom_activity_audioon)
+            break;
+
+        static float cdrom_activity_float_buffer[SOUNDBUFLEN * 2];
+        memset(cdrom_activity_float_buffer, 0, sizeof(cdrom_activity_float_buffer));
+        cdrom_activity_audio_callback((int16_t*)cdrom_activity_float_buffer, SOUNDBUFLEN * 2);
+        givealbuffer_cdrom_activity(cdrom_activity_float_buffer, SOUNDBUFLEN * 2);
+    }
+}
+
+void
+sound_cdrom_activity_thread_init(void)
+{
+    if (!cdrom_activity_audioon) {
+        cdrom_activity_audioon = 1;
+        cdrom_activity_thread_enable = 1;
+        sound_cdrom_activity_start_event = thread_create_event();
+        sound_cdrom_activity_event = thread_create_event();
+        sound_cdrom_activity_thread_h = thread_create(sound_cdrom_activity_thread, NULL);
+
+        thread_wait_event(sound_cdrom_activity_start_event, -1);
+        thread_reset_event(sound_cdrom_activity_start_event);
+    }
+}
+
+void
+sound_cdrom_activity_thread_end(void)
+{
+    if (cdrom_activity_audioon) {
+        cdrom_activity_audioon = 0;
+        cdrom_activity_thread_enable = 0;
+        thread_set_event(sound_cdrom_activity_event);
+        thread_wait(sound_cdrom_activity_thread_h);
+
+        if (sound_cdrom_activity_event) {
+            thread_destroy_event(sound_cdrom_activity_event);
+            sound_cdrom_activity_event = NULL;
+        }
+
+        sound_cdrom_activity_thread_h = NULL;
+        if (sound_cdrom_activity_start_event) {
+            thread_destroy_event(sound_cdrom_activity_start_event);
+            sound_cdrom_activity_start_event = NULL;
         }
     }
 }

@@ -106,6 +106,9 @@ extern void sound_fdd_thread_end(void);
 extern void sound_hdd_thread_init(void);
 extern void sound_hdd_thread_end(void);
 
+extern void sound_cdrom_activity_thread_init(void);
+extern void sound_cdrom_activity_thread_end(void);
+
 extern void closeal(void);
 extern void inital(void);
 extern void givealbuffer(const void *buf);
@@ -114,6 +117,7 @@ extern void givealbuffer_wt(const void *buf);
 extern void givealbuffer_cd(const void *buf);
 extern void givealbuffer_fdd(const void *buf, const uint32_t size);
 extern void givealbuffer_hdd(const void *buf, const uint32_t size);
+extern void givealbuffer_cdrom_activity(const void *buf, const uint32_t size);
 
 #define sb_vibra16c_onboard_relocate_base sb_vibra16s_onboard_relocate_base
 #define sb_vibra16cl_onboard_relocate_base sb_vibra16s_onboard_relocate_base
