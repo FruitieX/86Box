@@ -55,6 +55,7 @@ extern "C" {
 #include <86box/fdd.h>
 #include <86box/fdd_86f.h>
 #include <86box/cdrom.h>
+#include <86box/cdrom_audio.h>
 #include <86box/scsi_device.h>
 #include <86box/rdisk.h>
 #include <86box/mo.h>
@@ -619,6 +620,14 @@ MediaMenu::cdromMount(int i, const QString &filename)
         fn.data()[strlen(fn.data()) - 1] = '/';
 #endif
     cdrom_load(&(cdrom[i]), fn.data(), 1);
+
+    /* Play tray close and spinup sounds if media was loaded */
+    if (strlen(cdrom[i].image_path) > 0 &&
+        cdrom[i].cd_status != CD_STATUS_EMPTY &&
+        cdrom[i].cd_status != CD_STATUS_DVD_REJECTED) {
+        cdrom_audio_tray_close(i);
+        cdrom_audio_spinup_drive(i);
+    }
 
     /* Signal media change to the emulated machine. */
     if (cdrom[i].insert) {

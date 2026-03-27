@@ -84,6 +84,7 @@
 #include <86box/fdc_ext.h>
 #include <86box/hdd.h>
 #include <86box/hdd_audio.h>
+#include <86box/cdrom_audio.h>
 #include <86box/hdc.h>
 #include <86box/hdc_ide.h>
 #include <86box/scsi.h>
@@ -1511,6 +1512,8 @@ pc_init_modules(void)
     hdd_audio_load_profiles();
     hdd_audio_init();
 
+    cdrom_audio_init();
+
     sound_init();
 
     hdc_init();
@@ -1773,6 +1776,9 @@ pc_reset_hard_init(void)
 
     /* Reset HDD audio to pick up any profile changes */
     hdd_audio_reset();
+
+    /* Reset CD-ROM audio to pick up any profile changes */
+    cdrom_audio_reset();
 
     /* Reset and reconfigure the SCSI layer. */
     scsi_card_init();

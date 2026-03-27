@@ -76,6 +76,7 @@
 #include <86box/scsi.h>
 #include <86box/scsi_device.h>
 #include <86box/cdrom.h>
+#include <86box/cdrom_audio.h>
 #include <86box/cdrom_interface.h>
 #include <86box/rdisk.h>
 #include <86box/mo.h>
@@ -1610,6 +1611,8 @@ load_floppy_and_cdrom_drives(void)
 
     floppy_ioctl_set_buffering(ini_section_get_int(cat, "fdd_host_buffering", 1));
 
+    cdrom_audio_load_profiles();
+
     memset(temp, 0x00, sizeof(temp));
     for (c = 0; c < CDROM_NUM; c++) {
         sprintf(temp, "cdrom_%02i_host_drive", c + 1);
@@ -1740,6 +1743,11 @@ load_floppy_and_cdrom_drives(void)
                           "than %i\n", c + 1, i + 1, MAX_IMAGE_PATH_LEN - 1);
             }
         }
+
+        /* Audio Profile */
+        sprintf(temp, "cdrom_%02i_audio", c + 1);
+        p = ini_section_get_string(cat, temp, "none");
+        cdrom[c].audio_profile = cdrom_audio_get_profile_by_internal_name(p);
 
         /* If the CD-ROM is disabled, delete all its variables. */
         if (cdrom[c].bus_type == CDROM_BUS_DISABLED) {
@@ -3842,6 +3850,17 @@ save_floppy_and_cdrom_drives(void)
                 ini_section_delete_var(cat, temp);
             else
                 save_image_file(cat, temp, cdrom[c].image_history[i]);
+        }
+
+        sprintf(temp, "cdrom_%02i_audio", c + 1);
+        {
+            int         prof          = cdrom[c].audio_profile;
+            const char *internal_name = cdrom_audio_get_profile_internal_name(prof);
+            if (internal_name && strcmp(internal_name, "none") != 0) {
+                ini_section_set_string(cat, temp, internal_name);
+            } else {
+                ini_section_delete_var(cat, temp);
+            }
         }
     }
 

@@ -34,6 +34,7 @@
 #include <86box/scsi_device.h>
 #include <86box/hdc_ide.h>
 #include <86box/scsi_cdrom.h>
+#include <86box/cdrom_audio.h>
 #include <86box/ui.h>
 
 #define IDE_ATAPI_IS_EARLY             id->sc->pad0
@@ -684,6 +685,13 @@ scsi_cdrom_set_period(scsi_cdrom_t *dev)
             period = cdrom_seek_time(dev->drv);
             scsi_cdrom_log(dev->log, "Seek period: %lf us\n", period);
             dev->callback += period;
+
+            /* Add spin-up delay if the drive is not already running */
+            period = cdrom_audio_get_spin_delay_us(dev->id);
+            if (period > 0.0) {
+                scsi_cdrom_log(dev->log, "Spin-up delay: %lf us\n", period);
+                dev->callback += period;
+            }
 
             /* 44100 * 16 bits * 2 channels = 176400 bytes per second */
             bytes_per_second = 176400.0;
@@ -2706,6 +2714,9 @@ scsi_cdrom_command(scsi_common_t *sc, const uint8_t *cdb)
 
                     dev->drv->seek_diff = ABS((int) (pos - dev->sector_pos));
                     dev->drv->seek_pos  = dev->sector_pos;
+
+                    if (dev->drv->seek_diff > 0)
+                        cdrom_audio_seek(dev->id, dev->sector_pos, cdrom_seek_time(dev->drv));
 
                     /* Any of these commands stop the audio playing. */
                     cdrom_stop(dev->drv);

@@ -28,6 +28,7 @@ extern "C" {
 #include <86box/fdd.h>
 #include <86box/cdrom.h>
 #include <86box/fdd_audio.h>
+#include <86box/cdrom_audio.h>
 }
 
 #include "qt_settingsfloppycdrom.hpp"
@@ -39,6 +40,7 @@ extern "C" {
 #include "qt_progsettings.hpp"
 
 uint64_t               ifa[FDD_NUM] = { 0 };
+static uint32_t        ica[CDROM_NUM] = { 0 };
 
 void
 SettingsFloppyCDROM::setFloppyType(QAbstractItemModel *model, const QModelIndex &idx, int type)
@@ -214,13 +216,32 @@ SettingsFloppyCDROM::SettingsFloppyCDROM(QWidget *parent)
             Harddrives::busTrackClass->device_track(1, DEV_CDROM, cdrom[i].bus_type, cdrom[i].scsi_device_id);
         else if (cdrom[i].bus_type == CDROM_BUS_MITSUMI)
             Harddrives::busTrackClass->device_track(1, DEV_CDROM, cdrom[i].bus_type, 0);
+
+        ica[i] = cdrom[i].audio_profile;
     }
     ui->tableViewCDROM->resizeColumnsToContents();
     ui->tableViewCDROM->horizontalHeader()->setSectionResizeMode(2, QHeaderView::Stretch);
 
     connect(ui->tableViewCDROM->selectionModel(), &QItemSelectionModel::currentRowChanged,
             this, &SettingsFloppyCDROM::onCDROMRowChanged);
+
+    {
+        int cdrom_profile_count = cdrom_audio_get_profile_count();
+        if (!cdrom_profile_count) {
+            ui->comboBoxCDROMAudio->addItem(tr("None"), 0);
+            ui->comboBoxCDROMAudio->setEnabled(false);
+        } else {
+            for (int i = 0; i < cdrom_profile_count; i++) {
+                const char *name = cdrom_audio_get_profile_name(i);
+                if (name)
+                    ui->comboBoxCDROMAudio->addItem(tr(name), i);
+            }
+        }
+        ui->comboBoxCDROMAudio->setSizeAdjustPolicy(QComboBox::AdjustToContents);
+    }
+
     ui->tableViewCDROM->setCurrentIndex(model->index(0, 0));
+    onCDROMRowChanged(model->index(0, 0));
 
     uint8_t bus_type = ui->comboBoxBus->currentData().toUInt();
     int     cdromIdx = ui->tableViewCDROM->selectionModel()->currentIndex().data().toInt();
@@ -279,6 +300,7 @@ SettingsFloppyCDROM::save()
         cdrom[i].res         = model->index(i, 0).data(Qt::UserRole + 1).toUInt();
         cdrom[i].speed       = model->index(i, 1).data(Qt::UserRole).toUInt();
         cdrom_set_type(i, model->index(i, 2).data(Qt::UserRole).toInt());
+        cdrom[i].audio_profile = ica[i];
     }
 
 #ifdef DISABLE_FDD_AUDIO
@@ -400,6 +422,16 @@ SettingsFloppyCDROM::onCDROMRowChanged(const QModelIndex &current)
     ui->comboBoxCDROMType->setEnabled(eligibleRows > 1);
     ui->comboBoxCDROMType->setCurrentIndex(-1);
     ui->comboBoxCDROMType->setCurrentIndex(selectedTypeRow);
+
+    /* Update CD-ROM audio profile selection */
+    {
+        int prof = ica[current.row()];
+        int comboIndex = ui->comboBoxCDROMAudio->findData(prof);
+        if (comboIndex < 0)
+            comboIndex = 0;
+        ui->comboBoxCDROMAudio->setCurrentIndex(comboIndex);
+        ui->comboBoxCDROMAudio->setEnabled(bus != CDROM_BUS_DISABLED);
+    }
 
     enableCurrentlySelectedChannel();
 }
@@ -580,4 +612,12 @@ SettingsFloppyCDROM::on_comboBoxCDROMType_activated(int)
 
     auto idx = ui->tableViewCDROM->selectionModel()->currentIndex();
     setCDROMSpeed(ui->tableViewCDROM->model(), idx.siblingAtColumn(1), speed);
+}
+
+void
+SettingsFloppyCDROM::on_comboBoxCDROMAudio_activated(int)
+{
+    auto idx  = ui->tableViewCDROM->selectionModel()->currentIndex();
+    int  prof = ui->comboBoxCDROMAudio->currentData().toInt();
+    ica[idx.row()] = prof;
 }

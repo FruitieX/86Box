@@ -336,6 +336,7 @@ typedef struct cdrom {
     uint32_t           cd_end;
     uint32_t           type;
     uint32_t           sector_size;
+    uint32_t           audio_profile;
 
     uint32_t           inv_field;
     int32_t            cached_sector;
