@@ -47,6 +47,12 @@ typedef struct {
     int   is_open; /* 1 = playing open sound, 0 = playing close sound */
 } cdrom_tray_state_t;
 
+/* Pending actions queued after a transition finishes */
+#define CDROM_PENDING_NONE       0
+#define CDROM_PENDING_TRAY_OPEN  1  /* Play tray open after spindown */
+#define CDROM_PENDING_TRAY_CLOSE 2  /* Play tray close after spindown/stop */
+#define CDROM_PENDING_SPINUP     4  /* Spin up after tray close finishes */
+
 /* Per-CD-ROM audio state */
 typedef struct {
     int                   cdrom_index;
@@ -56,6 +62,7 @@ typedef struct {
     int                   spindle_transition_pos;
     cdrom_seek_voice_t    seek_voices[CDROM_MAX_SEEK_VOICES];
     cdrom_tray_state_t    tray_state;
+    int                   pending_actions; /* Bitmask of CDROM_PENDING_* */
 } cdrom_audio_drive_state_t;
 
 /* Audio samples structure for a profile */
@@ -414,6 +421,7 @@ cdrom_audio_init_drive_states(void)
             state->spindle_pos             = 0;
             state->spindle_transition_pos  = 0;
             state->tray_state.active       = 0;
+            state->pending_actions         = CDROM_PENDING_NONE;
 
             for (int v = 0; v < CDROM_MAX_SEEK_VOICES; v++) {
                 state->seek_voices[v].active     = 0;
@@ -472,6 +480,7 @@ cdrom_audio_reset(void)
         drive_states[i].spindle_pos            = 0;
         drive_states[i].spindle_transition_pos = 0;
         drive_states[i].tray_state.active      = 0;
+        drive_states[i].pending_actions        = CDROM_PENDING_NONE;
         for (int v = 0; v < CDROM_MAX_SEEK_VOICES; v++) {
             drive_states[i].seek_voices[v].active   = 0;
             drive_states[i].seek_voices[v].position = 0;
@@ -549,8 +558,17 @@ cdrom_audio_spinup_drive(uint8_t cdrom_id)
 
     if (cdrom_audio_mutex)
         thread_wait_mutex(cdrom_audio_mutex);
-    state->spindle_state          = CDROM_SPINDLE_STARTING;
-    state->spindle_transition_pos = 0;
+
+    /* If tray close is still playing or pending, defer the spinup */
+    if (state->tray_state.active ||
+        (state->pending_actions & (CDROM_PENDING_TRAY_CLOSE | CDROM_PENDING_TRAY_OPEN))) {
+        state->pending_actions |= CDROM_PENDING_SPINUP;
+        cdrom_audio_log("CDROM Audio: Drive %d spinup deferred until tray close finishes\n", cdrom_id);
+    } else {
+        state->spindle_state          = CDROM_SPINDLE_STARTING;
+        state->spindle_transition_pos = 0;
+    }
+
     if (cdrom_audio_mutex)
         thread_release_mutex(cdrom_audio_mutex);
 }
@@ -602,10 +620,20 @@ cdrom_audio_tray_open(uint8_t cdrom_id)
 
     if (cdrom_audio_mutex)
         thread_wait_mutex(cdrom_audio_mutex);
-    state->tray_state.active   = 1;
-    state->tray_state.position = 0;
-    state->tray_state.volume   = samples->tray_open_volume;
-    state->tray_state.is_open  = 1;
+
+    /* If spindle is still stopping, defer the tray open sound */
+    if (state->spindle_state == CDROM_SPINDLE_STOPPING ||
+        state->spindle_state == CDROM_SPINDLE_RUNNING ||
+        state->spindle_state == CDROM_SPINDLE_STARTING) {
+        state->pending_actions |= CDROM_PENDING_TRAY_OPEN;
+        cdrom_audio_log("CDROM Audio: Drive %d tray open deferred until spindown\n", cdrom_id);
+    } else {
+        state->tray_state.active   = 1;
+        state->tray_state.position = 0;
+        state->tray_state.volume   = samples->tray_open_volume;
+        state->tray_state.is_open  = 1;
+    }
+
     if (cdrom_audio_mutex)
         thread_release_mutex(cdrom_audio_mutex);
 }
@@ -622,15 +650,21 @@ cdrom_audio_tray_close(uint8_t cdrom_id)
         return;
 
     cdrom_audio_samples_t *samples = &profile_samples[profile_id];
-    if (!samples->tray_close_buffer || samples->tray_close_samples == 0)
-        return;
 
     if (cdrom_audio_mutex)
         thread_wait_mutex(cdrom_audio_mutex);
-    state->tray_state.active   = 1;
-    state->tray_state.position = 0;
-    state->tray_state.volume   = samples->tray_close_volume;
-    state->tray_state.is_open  = 0;
+
+    /* If a tray open sound is still playing or pending, wait for it */
+    if (state->tray_state.active || (state->pending_actions & CDROM_PENDING_TRAY_OPEN)) {
+        state->pending_actions |= CDROM_PENDING_TRAY_CLOSE;
+        cdrom_audio_log("CDROM Audio: Drive %d tray close deferred\n", cdrom_id);
+    } else if (samples->tray_close_buffer && samples->tray_close_samples > 0) {
+        state->tray_state.active   = 1;
+        state->tray_state.position = 0;
+        state->tray_state.volume   = samples->tray_close_volume;
+        state->tray_state.is_open  = 0;
+    }
+
     if (cdrom_audio_mutex)
         thread_release_mutex(cdrom_audio_mutex);
 }
@@ -939,6 +973,66 @@ cdrom_audio_mix_tray_int16(cdrom_audio_drive_state_t *state, int16_t *buffer, in
     }
 }
 
+/* ---- Process pending actions after transitions complete ---- */
+
+static void
+cdrom_audio_process_pending(cdrom_audio_drive_state_t *state)
+{
+    if (state->pending_actions == CDROM_PENDING_NONE)
+        return;
+
+    /* After spindown completes, play tray open if pending */
+    if ((state->pending_actions & CDROM_PENDING_TRAY_OPEN) &&
+        state->spindle_state == CDROM_SPINDLE_STOPPED) {
+        state->pending_actions &= ~CDROM_PENDING_TRAY_OPEN;
+
+        int                    profile_id = state->profile_id;
+        cdrom_audio_samples_t *samples    = &profile_samples[profile_id];
+        if (samples->tray_open_buffer && samples->tray_open_samples > 0) {
+            state->tray_state.active   = 1;
+            state->tray_state.position = 0;
+            state->tray_state.volume   = samples->tray_open_volume;
+            state->tray_state.is_open  = 1;
+            cdrom_audio_log("CDROM Audio: Drive %d playing deferred tray open\n", state->cdrom_index);
+        }
+    }
+
+    /* After spindown or stop, play tray close if pending */
+    if ((state->pending_actions & CDROM_PENDING_TRAY_CLOSE) &&
+        state->spindle_state == CDROM_SPINDLE_STOPPED &&
+        !state->tray_state.active) {
+        state->pending_actions &= ~CDROM_PENDING_TRAY_CLOSE;
+
+        int                    profile_id = state->profile_id;
+        cdrom_audio_samples_t *samples    = &profile_samples[profile_id];
+        if (samples->tray_close_buffer && samples->tray_close_samples > 0) {
+            state->tray_state.active   = 1;
+            state->tray_state.position = 0;
+            state->tray_state.volume   = samples->tray_close_volume;
+            state->tray_state.is_open  = 0;
+            cdrom_audio_log("CDROM Audio: Drive %d playing deferred tray close\n", state->cdrom_index);
+        } else {
+            /* No tray close sound, process spinup immediately */
+            if (state->pending_actions & CDROM_PENDING_SPINUP) {
+                state->pending_actions &= ~CDROM_PENDING_SPINUP;
+                state->spindle_state          = CDROM_SPINDLE_STARTING;
+                state->spindle_transition_pos = 0;
+                cdrom_audio_log("CDROM Audio: Drive %d spinup (no tray close sound)\n", state->cdrom_index);
+            }
+        }
+    }
+
+    /* After tray close finishes, spin up if pending */
+    if ((state->pending_actions & CDROM_PENDING_SPINUP) &&
+        !state->tray_state.active &&
+        state->spindle_state == CDROM_SPINDLE_STOPPED) {
+        state->pending_actions &= ~CDROM_PENDING_SPINUP;
+        state->spindle_state          = CDROM_SPINDLE_STARTING;
+        state->spindle_transition_pos = 0;
+        cdrom_audio_log("CDROM Audio: Drive %d spinning up after tray close\n", state->cdrom_index);
+    }
+}
+
 /* ---- Per-drive processing ---- */
 
 static void
@@ -981,6 +1075,9 @@ cdrom_audio_process_drive_float(cdrom_audio_drive_state_t *state, float *float_b
         cdrom_audio_mix_tray_float(state, float_buffer, frames_in_buffer);
         thread_release_mutex(cdrom_audio_mutex);
     }
+
+    /* Process pending sequenced actions */
+    cdrom_audio_process_pending(state);
 }
 
 static void
@@ -1023,6 +1120,9 @@ cdrom_audio_process_drive_int16(cdrom_audio_drive_state_t *state, int16_t *buffe
         cdrom_audio_mix_tray_int16(state, buffer, frames_in_buffer);
         thread_release_mutex(cdrom_audio_mutex);
     }
+
+    /* Process pending sequenced actions */
+    cdrom_audio_process_pending(state);
 }
 
 void

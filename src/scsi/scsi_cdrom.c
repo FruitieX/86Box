@@ -34,6 +34,7 @@
 #include <86box/scsi_device.h>
 #include <86box/hdc_ide.h>
 #include <86box/scsi_cdrom.h>
+#include <86box/cdrom_audio.h>
 #include <86box/ui.h>
 
 #define IDE_ATAPI_IS_EARLY             id->sc->pad0
@@ -2706,6 +2707,9 @@ scsi_cdrom_command(scsi_common_t *sc, const uint8_t *cdb)
 
                     dev->drv->seek_diff = ABS((int) (pos - dev->sector_pos));
                     dev->drv->seek_pos  = dev->sector_pos;
+
+                    if (dev->drv->seek_diff > 0)
+                        cdrom_audio_seek(dev->id, dev->sector_pos);
 
                     /* Any of these commands stop the audio playing. */
                     cdrom_stop(dev->drv);
