@@ -63,6 +63,9 @@ typedef struct {
     cdrom_seek_voice_t    seek_voices[CDROM_MAX_SEEK_VOICES];
     cdrom_tray_state_t    tray_state;
     int                   pending_actions; /* Bitmask of CDROM_PENDING_* */
+    int                   idle_samples;         /* Samples since last activity */
+    int                   idle_timeout_samples; /* Threshold for spindown (0=disabled) */
+    int                   read_delay_samples;   /* Spinup time before data available (0=use WAV duration) */
 } cdrom_audio_drive_state_t;
 
 /* Audio samples structure for a profile */
@@ -200,6 +203,12 @@ cdrom_audio_load_profiles(void)
         file = ini_section_get_string(cat, "tray_close_file", "");
         strncpy(config->tray_close.filename, file, sizeof(config->tray_close.filename) - 1);
         config->tray_close.volume = (float) ini_section_get_double(cat, "tray_close_volume", 1.0);
+
+        /* Idle spindown timeout (milliseconds, 0 = never spin down) */
+        config->idle_timeout_ms = ini_section_get_int(cat, "idle_timeout_ms", 300000);
+
+        /* Read delay: time from spinup start until data is available (0 = use spinup WAV duration) */
+        config->read_delay_ms = ini_section_get_int(cat, "read_delay_ms", 0);
 
         cdrom_audio_log("CDROM Audio: Loaded profile %d: %s (%s)\n",
                         audio_profile_count, config->name, config->internal_name);
@@ -422,6 +431,13 @@ cdrom_audio_init_drive_states(void)
             state->spindle_transition_pos  = 0;
             state->tray_state.active       = 0;
             state->pending_actions         = CDROM_PENDING_NONE;
+            state->idle_samples            = 0;
+            state->idle_timeout_samples    = (audio_profiles[state->profile_id].idle_timeout_ms > 0)
+                                           ? (48000 * audio_profiles[state->profile_id].idle_timeout_ms / 1000)
+                                           : 0;
+            state->read_delay_samples      = (audio_profiles[state->profile_id].read_delay_ms > 0)
+                                           ? (48000 * audio_profiles[state->profile_id].read_delay_ms / 1000)
+                                           : 0;
 
             for (int v = 0; v < CDROM_MAX_SEEK_VOICES; v++) {
                 state->seek_voices[v].active     = 0;
@@ -512,6 +528,15 @@ cdrom_audio_seek(uint8_t cdrom_id, uint32_t new_pos)
     if (!drive_state)
         return;
 
+    /* Reset idle timer on any drive activity */
+    drive_state->idle_samples = 0;
+
+    /* Auto-spinup if the drive is stopped/stopping */
+    if (drive_state->spindle_state == CDROM_SPINDLE_STOPPED ||
+        drive_state->spindle_state == CDROM_SPINDLE_STOPPING) {
+        cdrom_audio_spinup_drive(cdrom_id);
+    }
+
     int profile_id = drive_state->profile_id;
     if (profile_id == 0 || profile_id >= audio_profile_count)
         return;
@@ -559,11 +584,39 @@ cdrom_audio_spinup_drive(uint8_t cdrom_id)
     if (cdrom_audio_mutex)
         thread_wait_mutex(cdrom_audio_mutex);
 
-    /* If tray close is still playing or pending, defer the spinup */
-    if (state->tray_state.active ||
-        (state->pending_actions & (CDROM_PENDING_TRAY_CLOSE | CDROM_PENDING_TRAY_OPEN))) {
+    if (state->spindle_state == CDROM_SPINDLE_STOPPING) {
+        /* Reverse spindown immediately: the motor hasn't fully stopped yet.
+           Calculate how far through spindown we are, then skip proportionally
+           into the spinup sound (disc is still partially spinning). */
+        int                    profile_id = state->profile_id;
+        cdrom_audio_samples_t *samples    = &profile_samples[profile_id];
+
+        int spinup_skip = 0;
+        if (samples->spindle_stop_samples > 0 && samples->spindle_start_samples > 0) {
+            double spindown_progress = (double) state->spindle_transition_pos
+                                     / (double) samples->spindle_stop_samples;
+            /* Skip the portion of spinup corresponding to remaining motor speed.
+               e.g. 30% through spindown → motor at ~70% → skip 70% of spinup */
+            spinup_skip = (int) ((1.0 - spindown_progress) * (double) samples->spindle_start_samples);
+            if (spinup_skip >= samples->spindle_start_samples)
+                spinup_skip = samples->spindle_start_samples - 1;
+            if (spinup_skip < 0)
+                spinup_skip = 0;
+        }
+
+        state->spindle_state          = CDROM_SPINDLE_STARTING;
+        state->spindle_transition_pos = spinup_skip;
+        cdrom_audio_log("CDROM Audio: Drive %d reversed spindown at %.0f%%, spinup skip=%d/%d\n",
+                        cdrom_id,
+                        samples->spindle_stop_samples > 0
+                            ? 100.0 * state->spindle_transition_pos / samples->spindle_stop_samples
+                            : 0.0,
+                        spinup_skip, samples->spindle_start_samples);
+    } else if (state->tray_state.active ||
+               (state->pending_actions & (CDROM_PENDING_TRAY_CLOSE | CDROM_PENDING_TRAY_OPEN))) {
         state->pending_actions |= CDROM_PENDING_SPINUP;
-        cdrom_audio_log("CDROM Audio: Drive %d spinup deferred until tray close finishes\n", cdrom_id);
+        cdrom_audio_log("CDROM Audio: Drive %d spinup deferred (tray=%d, pending=0x%x)\n",
+                        cdrom_id, state->tray_state.active, state->pending_actions);
     } else {
         state->spindle_state          = CDROM_SPINDLE_STARTING;
         state->spindle_transition_pos = 0;
@@ -601,6 +654,60 @@ cdrom_audio_get_drive_spindle_state(uint8_t cdrom_id)
     if (!state)
         return CDROM_SPINDLE_STOPPED;
     return state->spindle_state;
+}
+
+double
+cdrom_audio_get_spin_delay_us(uint8_t cdrom_id)
+{
+    cdrom_audio_drive_state_t *state = cdrom_audio_find_drive_state(cdrom_id);
+    if (!state)
+        return 0.0;
+
+    int profile_id = state->profile_id;
+    if (profile_id <= 0 || profile_id >= audio_profile_count)
+        return 0.0;
+
+    cdrom_audio_samples_t *samples = &profile_samples[profile_id];
+    if (!samples->loaded)
+        return 0.0;
+
+    /* Effective spinup duration for timing purposes:
+       if read_delay_samples is set, use it; otherwise use the WAV duration */
+    double full_spinup = (state->read_delay_samples > 0)
+                       ? (double) state->read_delay_samples
+                       : (double) samples->spindle_start_samples;
+
+    double delay_samples = 0.0;
+
+    switch (state->spindle_state) {
+        case CDROM_SPINDLE_RUNNING:
+            return 0.0;
+        case CDROM_SPINDLE_STARTING:
+            /* Scale the remaining delay proportionally to how much spinup WAV remains.
+               This handles both normal spinup and reversed-spindown cases correctly:
+               after a reversal, transition_pos is already partway through the WAV. */
+            if (samples->spindle_start_samples > 0) {
+                double remaining_fraction = (double) (samples->spindle_start_samples - state->spindle_transition_pos)
+                                          / (double) samples->spindle_start_samples;
+                delay_samples = remaining_fraction * full_spinup;
+            }
+            break;
+        case CDROM_SPINDLE_STOPPING:
+            /* This case should be rare (reversal now happens immediately),
+               but handle defensively: remaining spindown + full spinup */
+            delay_samples = (double) (samples->spindle_stop_samples - state->spindle_transition_pos)
+                          + full_spinup;
+            break;
+        case CDROM_SPINDLE_STOPPED:
+            delay_samples = full_spinup;
+            break;
+    }
+
+    if (delay_samples <= 0.0)
+        return 0.0;
+
+    /* Convert audio samples at 48 kHz to microseconds */
+    return (delay_samples / 48000.0) * 1000000.0;
 }
 
 void
@@ -1076,6 +1183,17 @@ cdrom_audio_process_drive_float(cdrom_audio_drive_state_t *state, float *float_b
         thread_release_mutex(cdrom_audio_mutex);
     }
 
+    /* Idle spindown: accumulate idle time when running, trigger spindown on timeout */
+    if (state->spindle_state == CDROM_SPINDLE_RUNNING && state->idle_timeout_samples > 0) {
+        state->idle_samples += frames_in_buffer;
+        if (state->idle_samples >= state->idle_timeout_samples) {
+            cdrom_audio_log("CDROM Audio: Drive %d idle timeout, spinning down\n", state->cdrom_index);
+            state->spindle_state          = CDROM_SPINDLE_STOPPING;
+            state->spindle_transition_pos = 0;
+            state->idle_samples           = 0;
+        }
+    }
+
     /* Process pending sequenced actions */
     cdrom_audio_process_pending(state);
 }
@@ -1119,6 +1237,17 @@ cdrom_audio_process_drive_int16(cdrom_audio_drive_state_t *state, int16_t *buffe
         thread_wait_mutex(cdrom_audio_mutex);
         cdrom_audio_mix_tray_int16(state, buffer, frames_in_buffer);
         thread_release_mutex(cdrom_audio_mutex);
+    }
+
+    /* Idle spindown: accumulate idle time when running, trigger spindown on timeout */
+    if (state->spindle_state == CDROM_SPINDLE_RUNNING && state->idle_timeout_samples > 0) {
+        state->idle_samples += frames_in_buffer;
+        if (state->idle_samples >= state->idle_timeout_samples) {
+            cdrom_audio_log("CDROM Audio: Drive %d idle timeout, spinning down\n", state->cdrom_index);
+            state->spindle_state          = CDROM_SPINDLE_STOPPING;
+            state->spindle_transition_pos = 0;
+            state->idle_samples           = 0;
+        }
     }
 
     /* Process pending sequenced actions */

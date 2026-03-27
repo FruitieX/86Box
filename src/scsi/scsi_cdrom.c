@@ -686,6 +686,13 @@ scsi_cdrom_set_period(scsi_cdrom_t *dev)
             scsi_cdrom_log(dev->log, "Seek period: %lf us\n", period);
             dev->callback += period;
 
+            /* Add spin-up delay if the drive is not already running */
+            period = cdrom_audio_get_spin_delay_us(dev->id);
+            if (period > 0.0) {
+                scsi_cdrom_log(dev->log, "Spin-up delay: %lf us\n", period);
+                dev->callback += period;
+            }
+
             /* 44100 * 16 bits * 2 channels = 176400 bytes per second */
             bytes_per_second = 176400.0;
             bytes_per_second *= (double) dev->drv->cur_speed;

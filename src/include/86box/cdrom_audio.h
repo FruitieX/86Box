@@ -48,6 +48,8 @@ typedef struct {
     cdrom_audio_sample_config_t seek_track;
     cdrom_audio_sample_config_t tray_open;
     cdrom_audio_sample_config_t tray_close;
+    int                         idle_timeout_ms; /* Spindown after idle (ms), 0=never */
+    int                         read_delay_ms;   /* Spinup time before data available (ms), 0=use WAV duration */
 } cdrom_audio_profile_config_t;
 
 /* Functions for profile management */
@@ -69,6 +71,7 @@ extern void cdrom_audio_seek(uint8_t cdrom_id, uint32_t new_pos);
 extern void                 cdrom_audio_spinup_drive(uint8_t cdrom_id);
 extern void                 cdrom_audio_spindown_drive(uint8_t cdrom_id);
 extern cdrom_spindle_state_t cdrom_audio_get_drive_spindle_state(uint8_t cdrom_id);
+extern double                cdrom_audio_get_spin_delay_us(uint8_t cdrom_id);
 
 /* Tray open/close sounds */
 extern void cdrom_audio_tray_open(uint8_t cdrom_id);
