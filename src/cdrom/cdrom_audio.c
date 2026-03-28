@@ -29,15 +29,13 @@
 #include <86box/mem.h>
 #include <86box/rom.h>
 
-/* Maximum number of simultaneous seek sounds per CD-ROM */
-#define CDROM_MAX_SEEK_VOICES 8
-
+/* Seek sound state (single voice - a physical drive has one head) */
 typedef struct {
     int   active;
     int   position;
     float volume;
     int   profile_id;
-} cdrom_seek_voice_t;
+} cdrom_seek_state_t;
 
 /* Tray sound state */
 typedef struct {
@@ -60,7 +58,7 @@ typedef struct {
     cdrom_spindle_state_t spindle_state;
     int                   spindle_pos;
     int                   spindle_transition_pos;
-    cdrom_seek_voice_t    seek_voices[CDROM_MAX_SEEK_VOICES];
+    cdrom_seek_state_t    seek_state;
     cdrom_tray_state_t    tray_state;
     int                   pending_actions; /* Bitmask of CDROM_PENDING_* */
     int                   idle_samples;         /* Samples since last activity */
@@ -439,12 +437,10 @@ cdrom_audio_init_drive_states(void)
                                            ? (48000 * audio_profiles[state->profile_id].read_delay_ms / 1000)
                                            : 0;
 
-            for (int v = 0; v < CDROM_MAX_SEEK_VOICES; v++) {
-                state->seek_voices[v].active     = 0;
-                state->seek_voices[v].position   = 0;
-                state->seek_voices[v].volume     = 1.0f;
-                state->seek_voices[v].profile_id = state->profile_id;
-            }
+            state->seek_state.active     = 0;
+            state->seek_state.position   = 0;
+            state->seek_state.volume     = 1.0f;
+            state->seek_state.profile_id = state->profile_id;
 
             cdrom_audio_load_profile_samples(state->profile_id);
 
@@ -497,11 +493,9 @@ cdrom_audio_reset(void)
         drive_states[i].spindle_transition_pos = 0;
         drive_states[i].tray_state.active      = 0;
         drive_states[i].pending_actions        = CDROM_PENDING_NONE;
-        for (int v = 0; v < CDROM_MAX_SEEK_VOICES; v++) {
-            drive_states[i].seek_voices[v].active   = 0;
-            drive_states[i].seek_voices[v].position = 0;
-            drive_states[i].seek_voices[v].volume   = 1.0f;
-        }
+        drive_states[i].seek_state.active      = 0;
+        drive_states[i].seek_state.position    = 0;
+        drive_states[i].seek_state.volume      = 1.0f;
     }
     active_drive_count = 0;
 
@@ -553,17 +547,11 @@ cdrom_audio_seek(uint8_t cdrom_id, uint32_t new_pos)
 
     thread_wait_mutex(cdrom_audio_mutex);
 
-    /* Find a free seek voice */
-    for (int v = 0; v < CDROM_MAX_SEEK_VOICES; v++) {
-        if (!drive_state->seek_voices[v].active) {
-            drive_state->seek_voices[v].active     = 1;
-            drive_state->seek_voices[v].position   = 0;
-            drive_state->seek_voices[v].volume     = samples->seek_volume;
-            drive_state->seek_voices[v].profile_id = profile_id;
-            thread_release_mutex(cdrom_audio_mutex);
-            return;
-        }
-    }
+    /* Restart the single seek voice — cuts any in-progress seek sound */
+    drive_state->seek_state.active     = 1;
+    drive_state->seek_state.position   = 0;
+    drive_state->seek_state.volume     = samples->seek_volume;
+    drive_state->seek_state.profile_id = profile_id;
 
     thread_release_mutex(cdrom_audio_mutex);
 }
@@ -845,31 +833,29 @@ cdrom_audio_mix_spindle_stop_float(cdrom_audio_drive_state_t *state, cdrom_audio
 static void
 cdrom_audio_mix_seek_float(cdrom_audio_drive_state_t *state, float *float_buffer, int frames_in_buffer)
 {
-    for (int v = 0; v < CDROM_MAX_SEEK_VOICES; v++) {
-        if (!state->seek_voices[v].active)
-            continue;
+    if (!state->seek_state.active)
+        return;
 
-        int                    seek_profile_id = state->seek_voices[v].profile_id;
-        cdrom_audio_samples_t *seek_samples    = &profile_samples[seek_profile_id];
-        if (!seek_samples->seek_buffer || seek_samples->seek_samples == 0)
-            continue;
+    int                    seek_profile_id = state->seek_state.profile_id;
+    cdrom_audio_samples_t *seek_samples    = &profile_samples[seek_profile_id];
+    if (!seek_samples->seek_buffer || seek_samples->seek_samples == 0)
+        return;
 
-        float voice_vol = state->seek_voices[v].volume;
-        int   pos       = state->seek_voices[v].position;
-        if (pos < 0)
-            pos = 0;
+    float vol = state->seek_state.volume;
+    int   pos = state->seek_state.position;
+    if (pos < 0)
+        pos = 0;
 
-        for (int i = 0; i < frames_in_buffer && pos < seek_samples->seek_samples; i++, pos++) {
-            float_buffer[i * 2]     += (float) seek_samples->seek_buffer[pos * 2] / 131072.0f * voice_vol;
-            float_buffer[i * 2 + 1] += (float) seek_samples->seek_buffer[pos * 2 + 1] / 131072.0f * voice_vol;
-        }
+    for (int i = 0; i < frames_in_buffer && pos < seek_samples->seek_samples; i++, pos++) {
+        float_buffer[i * 2]     += (float) seek_samples->seek_buffer[pos * 2] / 131072.0f * vol;
+        float_buffer[i * 2 + 1] += (float) seek_samples->seek_buffer[pos * 2 + 1] / 131072.0f * vol;
+    }
 
-        if (pos >= seek_samples->seek_samples) {
-            state->seek_voices[v].active   = 0;
-            state->seek_voices[v].position = 0;
-        } else {
-            state->seek_voices[v].position = pos;
-        }
+    if (pos >= seek_samples->seek_samples) {
+        state->seek_state.active   = 0;
+        state->seek_state.position = 0;
+    } else {
+        state->seek_state.position = pos;
     }
 }
 
@@ -1000,37 +986,35 @@ cdrom_audio_mix_spindle_stop_int16(cdrom_audio_drive_state_t *state, cdrom_audio
 static void
 cdrom_audio_mix_seek_int16(cdrom_audio_drive_state_t *state, int16_t *buffer, int frames_in_buffer)
 {
-    for (int v = 0; v < CDROM_MAX_SEEK_VOICES; v++) {
-        if (!state->seek_voices[v].active)
-            continue;
+    if (!state->seek_state.active)
+        return;
 
-        int                    seek_profile_id = state->seek_voices[v].profile_id;
-        cdrom_audio_samples_t *seek_samples    = &profile_samples[seek_profile_id];
-        if (!seek_samples->seek_buffer || seek_samples->seek_samples == 0)
-            continue;
+    int                    seek_profile_id = state->seek_state.profile_id;
+    cdrom_audio_samples_t *seek_samples    = &profile_samples[seek_profile_id];
+    if (!seek_samples->seek_buffer || seek_samples->seek_samples == 0)
+        return;
 
-        float voice_vol = state->seek_voices[v].volume;
-        int   pos       = state->seek_voices[v].position;
-        if (pos < 0)
-            pos = 0;
+    float vol = state->seek_state.volume;
+    int   pos = state->seek_state.position;
+    if (pos < 0)
+        pos = 0;
 
-        for (int i = 0; i < frames_in_buffer && pos < seek_samples->seek_samples; i++, pos++) {
-            int32_t left  = buffer[i * 2] + (int32_t) (seek_samples->seek_buffer[pos * 2] * voice_vol);
-            int32_t right = buffer[i * 2 + 1] + (int32_t) (seek_samples->seek_buffer[pos * 2 + 1] * voice_vol);
-            if (left > 32767) left = 32767;
-            if (left < -32768) left = -32768;
-            if (right > 32767) right = 32767;
-            if (right < -32768) right = -32768;
-            buffer[i * 2]     = (int16_t) left;
-            buffer[i * 2 + 1] = (int16_t) right;
-        }
+    for (int i = 0; i < frames_in_buffer && pos < seek_samples->seek_samples; i++, pos++) {
+        int32_t left  = buffer[i * 2] + (int32_t) (seek_samples->seek_buffer[pos * 2] * vol);
+        int32_t right = buffer[i * 2 + 1] + (int32_t) (seek_samples->seek_buffer[pos * 2 + 1] * vol);
+        if (left > 32767) left = 32767;
+        if (left < -32768) left = -32768;
+        if (right > 32767) right = 32767;
+        if (right < -32768) right = -32768;
+        buffer[i * 2]     = (int16_t) left;
+        buffer[i * 2 + 1] = (int16_t) right;
+    }
 
-        if (pos >= seek_samples->seek_samples) {
-            state->seek_voices[v].active   = 0;
-            state->seek_voices[v].position = 0;
-        } else {
-            state->seek_voices[v].position = pos;
-        }
+    if (pos >= seek_samples->seek_samples) {
+        state->seek_state.active   = 0;
+        state->seek_state.position = 0;
+    } else {
+        state->seek_state.position = pos;
     }
 }
 
