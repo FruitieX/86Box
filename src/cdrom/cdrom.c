@@ -43,7 +43,7 @@
 
 #define RAW_SECTOR_SIZE    2352
 
-#define MIN_SEEK           2000
+#define MIN_SEEK           16
 #define MAX_SEEK           333333
 
 cdrom_t cdrom[CDROM_NUM] = { 0 };
@@ -182,11 +182,11 @@ cdrom_get_short_seek(const cdrom_t *dev)
             log_fatal(dev->log, "0x speed\n");
             return 0.0;
         case 1:
-            return 240.0;
+            return 15000.0;
         case 2:
-            return 160.0;
+            return 12000.0;
         case 3:
-            return 150.0;
+            return 11000.0;
         case 4:
         case 5:
         case 6:
@@ -195,17 +195,17 @@ cdrom_get_short_seek(const cdrom_t *dev)
         case 9:
         case 10:
         case 11:
-            return 112.0;
+            return 10000.0;
         case 12:
         case 13:
         case 14:
         case 15:
-            return 75.0;
+            return 9000.0;
         case 16:
         case 17:
         case 18:
         case 19:
-            return 58.0;
+            return 8000.0;
         case 20:
         case 21:
         case 22:
@@ -219,10 +219,10 @@ cdrom_get_short_seek(const cdrom_t *dev)
         case 46:
         case 47:
         case 48:
-            return 50.0;
+            return 7000.0;
         default:
             /* 24-32, 52+ */
-            return 45.0;
+            return 6000.0;
     }
 }
 
@@ -234,11 +234,11 @@ cdrom_get_long_seek(const cdrom_t *dev)
             log_fatal(dev->log, "0x speed\n");
             return 0.0;
         case 1:
-            return 1446.0;
+            return 385000.0;
         case 2:
-            return 1000.0;
+            return 288000.0;
         case 3:
-            return 900.0;
+            return 239000.0;
         case 4:
         case 5:
         case 6:
@@ -247,17 +247,17 @@ cdrom_get_long_seek(const cdrom_t *dev)
         case 9:
         case 10:
         case 11:
-            return 675.0;
+            return 170000.0;
         case 12:
         case 13:
         case 14:
         case 15:
-            return 400.0;
+            return 121000.0;
         case 16:
         case 17:
         case 18:
         case 19:
-            return 350.0;
+            return 102000.0;
         case 20:
         case 21:
         case 22:
@@ -271,10 +271,10 @@ cdrom_get_long_seek(const cdrom_t *dev)
         case 46:
         case 47:
         case 48:
-            return 300.0;
+            return 83000.0;
         default:
             /* 24-32, 52+ */
-            return 270.0;
+            return 74000.0;
     }
 }
 

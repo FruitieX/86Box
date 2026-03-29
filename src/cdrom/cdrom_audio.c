@@ -589,8 +589,18 @@ cdrom_audio_seek(uint8_t cdrom_id, uint32_t new_pos, double seek_time_us)
 
     /* Convert seek time from microseconds to audio samples at 48 kHz. */
     int duration = (int) (seek_time_us * 48000.0 / 1000000.0);
-    if (duration < 1)
-        duration = 1;
+
+    /* Ensure minimum duration: at least one full WAV play (non-segmented)
+       or head+tail (segmented) so the seek is always audible. */
+    if (samples->seek_segmented) {
+        int min_dur = samples->seek_head_end +
+                      (samples->seek_samples - samples->seek_tail_start);
+        if (duration < min_dur)
+            duration = min_dur;
+    } else {
+        if (duration < samples->seek_samples)
+            duration = samples->seek_samples;
+    }
 
     if (!cdrom_audio_mutex)
         return;
