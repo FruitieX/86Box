@@ -2716,7 +2716,7 @@ scsi_cdrom_command(scsi_common_t *sc, const uint8_t *cdb)
                     dev->drv->seek_pos  = dev->sector_pos;
 
                     if (dev->drv->seek_diff > 0)
-                        cdrom_audio_seek(dev->id, dev->sector_pos);
+                        cdrom_audio_seek(dev->id, dev->sector_pos, cdrom_seek_time(dev->drv));
 
                     /* Any of these commands stop the audio playing. */
                     cdrom_stop(dev->drv);

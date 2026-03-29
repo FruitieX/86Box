@@ -1475,7 +1475,7 @@ cdrom_seek(cdrom_t *dev, const uint32_t pos, const uint8_t vendor_type)
     dev->seek_pos      = real_pos;
     dev->cached_sector = -1;
 
-    cdrom_audio_seek(dev->id, real_pos);
+    cdrom_audio_seek(dev->id, real_pos, cdrom_seek_time(dev));
 }
 
 int

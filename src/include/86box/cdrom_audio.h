@@ -31,6 +31,13 @@ typedef enum {
     CDROM_SPINDLE_STOPPING
 } cdrom_spindle_state_t;
 
+/* Seek sound playback phases (three-segment approach) */
+typedef enum {
+    CDROM_SEEK_PHASE_HEAD = 0, /* Attack / initial click */
+    CDROM_SEEK_PHASE_LOOP,     /* Loopable travel noise */
+    CDROM_SEEK_PHASE_TAIL      /* Settle / deceleration */
+} cdrom_seek_phase_t;
+
 /* Audio sample configuration structure */
 typedef struct {
     char  filename[512];
@@ -48,8 +55,10 @@ typedef struct {
     cdrom_audio_sample_config_t seek_track;
     cdrom_audio_sample_config_t tray_open;
     cdrom_audio_sample_config_t tray_close;
-    int                         idle_timeout_ms; /* Spindown after idle (ms), 0=never */
-    int                         read_delay_ms;   /* Spinup time before data available (ms), 0=use WAV duration */
+    int                         idle_timeout_ms;   /* Spindown after idle (ms), 0=never */
+    int                         read_delay_ms;     /* Spinup time before data available (ms), 0=use WAV duration */
+    int                         seek_loop_start;   /* Start of loopable middle section (sample index), 0=disabled */
+    int                         seek_loop_end;     /* End of loopable middle section (sample index), 0=disabled */
 } cdrom_audio_profile_config_t;
 
 /* Functions for profile management */
@@ -65,7 +74,7 @@ extern void cdrom_audio_init(void);
 extern void cdrom_audio_reset(void);
 extern void cdrom_audio_close(void);
 extern void cdrom_activity_audio_callback(int16_t *buffer, int length);
-extern void cdrom_audio_seek(uint8_t cdrom_id, uint32_t new_pos);
+extern void cdrom_audio_seek(uint8_t cdrom_id, uint32_t new_pos, double seek_time_us);
 
 /* Per-drive spindle control */
 extern void                 cdrom_audio_spinup_drive(uint8_t cdrom_id);

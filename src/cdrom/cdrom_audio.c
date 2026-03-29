@@ -31,10 +31,14 @@
 
 /* Seek sound state (single voice - a physical drive has one head) */
 typedef struct {
-    int   active;
-    int   position;
-    float volume;
-    int   profile_id;
+    int                active;
+    int                position;          /* Current position within the WAV segment */
+    int                elapsed;           /* Total samples played so far */
+    int                duration_samples;  /* Total duration to play (converted from seek time) */
+    float              volume;
+    int                profile_id;
+    cdrom_seek_phase_t phase;             /* Current playback phase (HEAD/LOOP/TAIL) */
+    int                segmented;         /* 1 if using three-segment playback */
 } cdrom_seek_state_t;
 
 /* Tray sound state */
@@ -80,6 +84,11 @@ typedef struct {
     int16_t *seek_buffer;
     int      seek_samples;
     float    seek_volume;
+    int      seek_head_end;    /* End of head segment (sample index, exclusive) */
+    int      seek_loop_start;  /* Start of loopable middle (sample index) */
+    int      seek_loop_end;    /* End of loopable middle (sample index, exclusive) */
+    int      seek_tail_start;  /* Start of tail segment (sample index) */
+    int      seek_segmented;   /* 1 if segment markers are valid */
     int16_t *tray_open_buffer;
     int      tray_open_samples;
     float    tray_open_volume;
@@ -207,6 +216,10 @@ cdrom_audio_load_profiles(void)
 
         /* Read delay: time from spinup start until data is available (0 = use spinup WAV duration) */
         config->read_delay_ms = ini_section_get_int(cat, "read_delay_ms", 0);
+
+        /* Seek segment markers for three-part WAV (sample positions, 0 = disabled) */
+        config->seek_loop_start = ini_section_get_int(cat, "seek_loop_start", 0);
+        config->seek_loop_end   = ini_section_get_int(cat, "seek_loop_end", 0);
 
         cdrom_audio_log("CDROM Audio: Loaded profile %d: %s (%s)\n",
                         audio_profile_count, config->name, config->internal_name);
@@ -370,6 +383,34 @@ cdrom_audio_load_profile_samples(int profile_id)
             samples->seek_volume = config->seek_track.volume;
             cdrom_audio_log("CDROM Audio: Loaded seek sound, %d frames (%.1f ms)\n",
                             samples->seek_samples, (float) samples->seek_samples / 48.0f);
+
+            /* Set three-segment boundaries if markers are configured */
+            if (config->seek_loop_start > 0 && config->seek_loop_end > 0 &&
+                config->seek_loop_end > config->seek_loop_start) {
+                samples->seek_head_end   = config->seek_loop_start;
+                samples->seek_loop_start = config->seek_loop_start;
+                samples->seek_loop_end   = config->seek_loop_end;
+                samples->seek_tail_start = config->seek_loop_end;
+
+                /* Clamp to WAV length */
+                if (samples->seek_head_end > samples->seek_samples)
+                    samples->seek_head_end = samples->seek_samples;
+                if (samples->seek_loop_start > samples->seek_samples)
+                    samples->seek_loop_start = samples->seek_samples;
+                if (samples->seek_loop_end > samples->seek_samples)
+                    samples->seek_loop_end = samples->seek_samples;
+                if (samples->seek_tail_start > samples->seek_samples)
+                    samples->seek_tail_start = samples->seek_samples;
+
+                /* Only mark as segmented if loop section has positive length */
+                if (samples->seek_loop_end > samples->seek_loop_start) {
+                    samples->seek_segmented = 1;
+                    cdrom_audio_log("CDROM Audio: Seek segments: head 0-%d, loop %d-%d, tail %d-%d\n",
+                                    samples->seek_head_end, samples->seek_loop_start,
+                                    samples->seek_loop_end, samples->seek_tail_start,
+                                    samples->seek_samples);
+                }
+            }
         } else {
             cdrom_audio_log("CDROM Audio: Failed to load seek sound: %s\n", config->seek_track.filename);
         }
@@ -437,10 +478,12 @@ cdrom_audio_init_drive_states(void)
                                            ? (48000 * audio_profiles[state->profile_id].read_delay_ms / 1000)
                                            : 0;
 
-            state->seek_state.active     = 0;
-            state->seek_state.position   = 0;
-            state->seek_state.volume     = 1.0f;
-            state->seek_state.profile_id = state->profile_id;
+            state->seek_state.active           = 0;
+            state->seek_state.position         = 0;
+            state->seek_state.elapsed          = 0;
+            state->seek_state.duration_samples = 0;
+            state->seek_state.volume           = 1.0f;
+            state->seek_state.profile_id       = state->profile_id;
 
             cdrom_audio_load_profile_samples(state->profile_id);
 
@@ -493,9 +536,11 @@ cdrom_audio_reset(void)
         drive_states[i].spindle_transition_pos = 0;
         drive_states[i].tray_state.active      = 0;
         drive_states[i].pending_actions        = CDROM_PENDING_NONE;
-        drive_states[i].seek_state.active      = 0;
-        drive_states[i].seek_state.position    = 0;
-        drive_states[i].seek_state.volume      = 1.0f;
+        drive_states[i].seek_state.active           = 0;
+        drive_states[i].seek_state.position         = 0;
+        drive_states[i].seek_state.elapsed          = 0;
+        drive_states[i].seek_state.duration_samples = 0;
+        drive_states[i].seek_state.volume           = 1.0f;
     }
     active_drive_count = 0;
 
@@ -516,7 +561,7 @@ cdrom_audio_reset(void)
 }
 
 void
-cdrom_audio_seek(uint8_t cdrom_id, uint32_t new_pos)
+cdrom_audio_seek(uint8_t cdrom_id, uint32_t new_pos, double seek_time_us)
 {
     cdrom_audio_drive_state_t *drive_state = cdrom_audio_find_drive_state(cdrom_id);
     if (!drive_state)
@@ -542,16 +587,25 @@ cdrom_audio_seek(uint8_t cdrom_id, uint32_t new_pos)
     if (!samples->seek_buffer || samples->seek_samples == 0)
         return;
 
+    /* Convert seek time from microseconds to audio samples at 48 kHz. */
+    int duration = (int) (seek_time_us * 48000.0 / 1000000.0);
+    if (duration < 1)
+        duration = 1;
+
     if (!cdrom_audio_mutex)
         return;
 
     thread_wait_mutex(cdrom_audio_mutex);
 
     /* Restart the single seek voice — cuts any in-progress seek sound */
-    drive_state->seek_state.active     = 1;
-    drive_state->seek_state.position   = 0;
-    drive_state->seek_state.volume     = samples->seek_volume;
-    drive_state->seek_state.profile_id = profile_id;
+    drive_state->seek_state.active           = 1;
+    drive_state->seek_state.position         = 0;
+    drive_state->seek_state.elapsed          = 0;
+    drive_state->seek_state.duration_samples = duration;
+    drive_state->seek_state.volume           = samples->seek_volume;
+    drive_state->seek_state.profile_id       = profile_id;
+    drive_state->seek_state.segmented        = samples->seek_segmented;
+    drive_state->seek_state.phase            = CDROM_SEEK_PHASE_HEAD;
 
     thread_release_mutex(cdrom_audio_mutex);
 }
@@ -841,21 +895,98 @@ cdrom_audio_mix_seek_float(cdrom_audio_drive_state_t *state, float *float_buffer
     if (!seek_samples->seek_buffer || seek_samples->seek_samples == 0)
         return;
 
-    float vol = state->seek_state.volume;
-    int   pos = state->seek_state.position;
-    if (pos < 0)
-        pos = 0;
+    float vol      = state->seek_state.volume;
+    int   pos      = state->seek_state.position;
+    int   elapsed  = state->seek_state.elapsed;
+    int   duration = state->seek_state.duration_samples;
 
-    for (int i = 0; i < frames_in_buffer && pos < seek_samples->seek_samples; i++, pos++) {
-        float_buffer[i * 2]     += (float) seek_samples->seek_buffer[pos * 2] / 131072.0f * vol;
-        float_buffer[i * 2 + 1] += (float) seek_samples->seek_buffer[pos * 2 + 1] / 131072.0f * vol;
+    if (!state->seek_state.segmented) {
+        /* Non-segmented: loop entire WAV for duration with fade-out */
+        int wav_len    = seek_samples->seek_samples;
+        int fade_start = duration - 480;
+        if (fade_start < 0)
+            fade_start = 0;
+
+        for (int i = 0; i < frames_in_buffer && elapsed < duration; i++, elapsed++) {
+            float env = 1.0f;
+            if (elapsed >= fade_start && duration > fade_start)
+                env = (float) (duration - elapsed) / (float) (duration - fade_start);
+
+            float_buffer[i * 2]     += (float) seek_samples->seek_buffer[pos * 2] / 131072.0f * vol * env;
+            float_buffer[i * 2 + 1] += (float) seek_samples->seek_buffer[pos * 2 + 1] / 131072.0f * vol * env;
+
+            pos++;
+            if (pos >= wav_len)
+                pos = 0;
+        }
+    } else {
+        /* Three-segment playback: HEAD -> LOOP (repeated) -> TAIL */
+        int head_end   = seek_samples->seek_head_end;
+        int loop_start = seek_samples->seek_loop_start;
+        int loop_end   = seek_samples->seek_loop_end;
+        int tail_start = seek_samples->seek_tail_start;
+        int tail_len   = seek_samples->seek_samples - tail_start;
+
+        /* Reserve time for the tail so we always play it */
+        int tail_budget = tail_len;
+        /* Fade out over last 480 samples of the tail */
+        int fade_start  = duration - 480;
+        if (fade_start < 0)
+            fade_start = 0;
+
+        for (int i = 0; i < frames_in_buffer && elapsed < duration; i++, elapsed++) {
+            float env = 1.0f;
+            if (elapsed >= fade_start && duration > fade_start)
+                env = (float) (duration - elapsed) / (float) (duration - fade_start);
+
+            /* Determine which segment to play */
+            if (state->seek_state.phase == CDROM_SEEK_PHASE_HEAD) {
+                float_buffer[i * 2]     += (float) seek_samples->seek_buffer[pos * 2] / 131072.0f * vol * env;
+                float_buffer[i * 2 + 1] += (float) seek_samples->seek_buffer[pos * 2 + 1] / 131072.0f * vol * env;
+                pos++;
+                if (pos >= head_end) {
+                    /* Head done; if remaining time can't fit loop, skip to tail */
+                    int remaining = duration - elapsed - 1;
+                    if (remaining <= tail_budget || loop_end <= loop_start) {
+                        state->seek_state.phase = CDROM_SEEK_PHASE_TAIL;
+                        pos = tail_start;
+                    } else {
+                        state->seek_state.phase = CDROM_SEEK_PHASE_LOOP;
+                        pos = loop_start;
+                    }
+                }
+            } else if (state->seek_state.phase == CDROM_SEEK_PHASE_LOOP) {
+                float_buffer[i * 2]     += (float) seek_samples->seek_buffer[pos * 2] / 131072.0f * vol * env;
+                float_buffer[i * 2 + 1] += (float) seek_samples->seek_buffer[pos * 2 + 1] / 131072.0f * vol * env;
+                pos++;
+                if (pos >= loop_end)
+                    pos = loop_start; /* Repeat loop section */
+
+                /* Transition to tail when remaining time <= tail length */
+                int remaining = duration - elapsed - 1;
+                if (remaining <= tail_budget) {
+                    state->seek_state.phase = CDROM_SEEK_PHASE_TAIL;
+                    pos = tail_start;
+                }
+            } else {
+                /* TAIL phase */
+                if (pos < seek_samples->seek_samples) {
+                    float_buffer[i * 2]     += (float) seek_samples->seek_buffer[pos * 2] / 131072.0f * vol * env;
+                    float_buffer[i * 2 + 1] += (float) seek_samples->seek_buffer[pos * 2 + 1] / 131072.0f * vol * env;
+                    pos++;
+                }
+                /* If tail WAV runs out before duration, we just output silence until duration ends */
+            }
+        }
     }
 
-    if (pos >= seek_samples->seek_samples) {
+    if (elapsed >= duration) {
         state->seek_state.active   = 0;
         state->seek_state.position = 0;
+        state->seek_state.elapsed  = 0;
     } else {
         state->seek_state.position = pos;
+        state->seek_state.elapsed  = elapsed;
     }
 }
 
@@ -994,27 +1125,109 @@ cdrom_audio_mix_seek_int16(cdrom_audio_drive_state_t *state, int16_t *buffer, in
     if (!seek_samples->seek_buffer || seek_samples->seek_samples == 0)
         return;
 
-    float vol = state->seek_state.volume;
-    int   pos = state->seek_state.position;
-    if (pos < 0)
-        pos = 0;
+    float vol      = state->seek_state.volume;
+    int   pos      = state->seek_state.position;
+    int   elapsed  = state->seek_state.elapsed;
+    int   duration = state->seek_state.duration_samples;
 
-    for (int i = 0; i < frames_in_buffer && pos < seek_samples->seek_samples; i++, pos++) {
-        int32_t left  = buffer[i * 2] + (int32_t) (seek_samples->seek_buffer[pos * 2] * vol);
-        int32_t right = buffer[i * 2 + 1] + (int32_t) (seek_samples->seek_buffer[pos * 2 + 1] * vol);
-        if (left > 32767) left = 32767;
-        if (left < -32768) left = -32768;
-        if (right > 32767) right = 32767;
-        if (right < -32768) right = -32768;
-        buffer[i * 2]     = (int16_t) left;
-        buffer[i * 2 + 1] = (int16_t) right;
+    if (!state->seek_state.segmented) {
+        /* Non-segmented: loop entire WAV for duration with fade-out */
+        int wav_len    = seek_samples->seek_samples;
+        int fade_start = duration - 480;
+        if (fade_start < 0)
+            fade_start = 0;
+
+        for (int i = 0; i < frames_in_buffer && elapsed < duration; i++, elapsed++) {
+            float env = 1.0f;
+            if (elapsed >= fade_start && duration > fade_start)
+                env = (float) (duration - elapsed) / (float) (duration - fade_start);
+
+            int32_t left  = buffer[i * 2] + (int32_t) (seek_samples->seek_buffer[pos * 2] * vol * env);
+            int32_t right = buffer[i * 2 + 1] + (int32_t) (seek_samples->seek_buffer[pos * 2 + 1] * vol * env);
+            if (left > 32767) left = 32767;
+            if (left < -32768) left = -32768;
+            if (right > 32767) right = 32767;
+            if (right < -32768) right = -32768;
+            buffer[i * 2]     = (int16_t) left;
+            buffer[i * 2 + 1] = (int16_t) right;
+
+            pos++;
+            if (pos >= wav_len)
+                pos = 0;
+        }
+    } else {
+        /* Three-segment playback: HEAD -> LOOP (repeated) -> TAIL */
+        int head_end   = seek_samples->seek_head_end;
+        int loop_start = seek_samples->seek_loop_start;
+        int loop_end   = seek_samples->seek_loop_end;
+        int tail_start = seek_samples->seek_tail_start;
+        int tail_len   = seek_samples->seek_samples - tail_start;
+
+        int tail_budget = tail_len;
+        int fade_start  = duration - 480;
+        if (fade_start < 0)
+            fade_start = 0;
+
+        for (int i = 0; i < frames_in_buffer && elapsed < duration; i++, elapsed++) {
+            float env = 1.0f;
+            if (elapsed >= fade_start && duration > fade_start)
+                env = (float) (duration - elapsed) / (float) (duration - fade_start);
+
+            int32_t left, right;
+
+            if (state->seek_state.phase == CDROM_SEEK_PHASE_HEAD) {
+                left  = buffer[i * 2] + (int32_t) (seek_samples->seek_buffer[pos * 2] * vol * env);
+                right = buffer[i * 2 + 1] + (int32_t) (seek_samples->seek_buffer[pos * 2 + 1] * vol * env);
+                pos++;
+                if (pos >= head_end) {
+                    int remaining = duration - elapsed - 1;
+                    if (remaining <= tail_budget || loop_end <= loop_start) {
+                        state->seek_state.phase = CDROM_SEEK_PHASE_TAIL;
+                        pos = tail_start;
+                    } else {
+                        state->seek_state.phase = CDROM_SEEK_PHASE_LOOP;
+                        pos = loop_start;
+                    }
+                }
+            } else if (state->seek_state.phase == CDROM_SEEK_PHASE_LOOP) {
+                left  = buffer[i * 2] + (int32_t) (seek_samples->seek_buffer[pos * 2] * vol * env);
+                right = buffer[i * 2 + 1] + (int32_t) (seek_samples->seek_buffer[pos * 2 + 1] * vol * env);
+                pos++;
+                if (pos >= loop_end)
+                    pos = loop_start;
+
+                int remaining = duration - elapsed - 1;
+                if (remaining <= tail_budget) {
+                    state->seek_state.phase = CDROM_SEEK_PHASE_TAIL;
+                    pos = tail_start;
+                }
+            } else {
+                if (pos < seek_samples->seek_samples) {
+                    left  = buffer[i * 2] + (int32_t) (seek_samples->seek_buffer[pos * 2] * vol * env);
+                    right = buffer[i * 2 + 1] + (int32_t) (seek_samples->seek_buffer[pos * 2 + 1] * vol * env);
+                    pos++;
+                } else {
+                    left  = buffer[i * 2];
+                    right = buffer[i * 2 + 1];
+                }
+            }
+
+            if (left > 32767) left = 32767;
+            if (left < -32768) left = -32768;
+            if (right > 32767) right = 32767;
+            if (right < -32768) right = -32768;
+            buffer[i * 2]     = (int16_t) left;
+            buffer[i * 2 + 1] = (int16_t) right;
+        }
     }
 
-    if (pos >= seek_samples->seek_samples) {
+    if (elapsed >= duration) {
         state->seek_state.active   = 0;
         state->seek_state.position = 0;
+        state->seek_state.elapsed  = 0;
     } else {
         state->seek_state.position = pos;
+        state->seek_state.elapsed  = elapsed;
     }
 }
 
