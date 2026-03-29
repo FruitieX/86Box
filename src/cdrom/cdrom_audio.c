@@ -589,18 +589,16 @@ cdrom_audio_seek(uint8_t cdrom_id, uint32_t new_pos, double seek_time_us)
 
     /* Convert seek time from microseconds to audio samples at 48 kHz. */
     int duration = (int) (seek_time_us * 48000.0 / 1000000.0);
+    if (duration < 1)
+        duration = 1;
 
-    /* Ensure minimum duration: at least one full WAV play (non-segmented)
-       or head+tail (segmented) so the seek is always audible. */
-    if (samples->seek_segmented) {
-        int min_dur = samples->seek_head_end +
-                      (samples->seek_samples - samples->seek_tail_start);
-        if (duration < min_dur)
-            duration = min_dur;
-    } else {
-        if (duration < samples->seek_samples)
-            duration = samples->seek_samples;
-    }
+    /* Scale volume with seek duration — short seeks are quieter (head barely
+       moves).  Full volume once duration >= WAV length; linear ramp below. */
+    float vol_scale = 1.0f;
+    if (duration < samples->seek_samples)
+        vol_scale = (float) duration / (float) samples->seek_samples;
+    if (vol_scale < 0.15f)
+        vol_scale = 0.15f;
 
     if (!cdrom_audio_mutex)
         return;
@@ -612,7 +610,7 @@ cdrom_audio_seek(uint8_t cdrom_id, uint32_t new_pos, double seek_time_us)
     drive_state->seek_state.position         = 0;
     drive_state->seek_state.elapsed          = 0;
     drive_state->seek_state.duration_samples = duration;
-    drive_state->seek_state.volume           = samples->seek_volume;
+    drive_state->seek_state.volume           = samples->seek_volume * vol_scale;
     drive_state->seek_state.profile_id       = profile_id;
     drive_state->seek_state.segmented        = samples->seek_segmented;
     drive_state->seek_state.phase            = CDROM_SEEK_PHASE_HEAD;
